@@ -91,10 +91,11 @@ class MembershipTier(TimestampMixin, Base):
 
     # Booking rules for this tier
     advance_booking_days: Mapped[int] = mapped_column(default=7, nullable=False)
-    max_concurrent_bookings: Mapped[int] = mapped_column(default=2, nullable=False)
-    max_daily_bookings: Mapped[int] = mapped_column(default=1, nullable=False)
+    max_concurrent_bookings: Mapped[int] = mapped_column(default=7, nullable=False)
+    max_daily_minutes: Mapped[int] = mapped_column(default=120, nullable=False)  # max minutes per day
     cancellation_deadline_hours: Mapped[int] = mapped_column(default=24, nullable=False)
     slot_durations_minutes: Mapped[list] = mapped_column(JSONB, default=[60, 120])
+    booking_window_time: Mapped[str] = mapped_column(String(5), default="21:00", nullable=False)  # HH:MM
 
     # Pricing (pennies to avoid float issues)
     annual_fee_pence: Mapped[int] = mapped_column(default=0, nullable=False)

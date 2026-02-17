@@ -109,5 +109,7 @@ class MembershipTierOut(BaseModel):
     slug: str
     advance_booking_days: int
     max_concurrent_bookings: int
+    max_daily_minutes: int
+    cancellation_deadline_hours: int
     peak_booking_fee_pence: int
     offpeak_booking_fee_pence: int
