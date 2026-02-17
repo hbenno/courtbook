@@ -1,0 +1,80 @@
+services:
+  # --- API ---
+  api:
+    build:
+      context: ../api
+      dockerfile: ../docker/api.Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../api:/app
+    environment:
+      CB_DATABASE_URL: postgresql+asyncpg://courtbook:courtbook@db:5432/courtbook
+      CB_REDIS_URL: redis://redis:6379/0
+      CB_DEBUG: "true"
+      CB_SECRET_KEY: dev-secret-change-in-production
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- Celery worker ---
+  worker:
+    build:
+      context: ../api
+      dockerfile: ../docker/api.Dockerfile
+    command: celery -A app.worker worker --loglevel=info --concurrency=2
+    volumes:
+      - ../api:/app
+    environment:
+      CB_DATABASE_URL: postgresql+asyncpg://courtbook:courtbook@db:5432/courtbook
+      CB_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- PostgreSQL ---
+  db:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: courtbook
+      POSTGRES_PASSWORD: courtbook
+      POSTGRES_DB: courtbook
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U courtbook"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --- Redis ---
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --- Mailpit (dev email capture) ---
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI
+    restart: unless-stopped
+
+volumes:
+  pgdata:
