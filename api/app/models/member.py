@@ -102,6 +102,8 @@ class MembershipTier(TimestampMixin, Base):
     annual_fee_pence: Mapped[int] = mapped_column(default=0, nullable=False)
     peak_booking_fee_pence: Mapped[int] = mapped_column(default=0, nullable=False)
     offpeak_booking_fee_pence: Mapped[int] = mapped_column(default=0, nullable=False)
+    early_booking_fee_pence: Mapped[int] = mapped_column(default=0, nullable=False)
+    floodlight_booking_fee_pence: Mapped[int] = mapped_column(default=0, nullable=False)
 
     # Fairness window eligibility
     fairness_eligible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -141,6 +143,9 @@ class OrgMembership(TimestampMixin, Base):
     # Payment
     payment_method: Mapped[str | None] = mapped_column(String(50))  # stripe, gocardless, cash, free
     gocardless_mandate_id: Mapped[str | None] = mapped_column(String(100))
+
+    # Credit balance (cached — authoritative source is credit_transactions table)
+    credit_balance_pence: Mapped[int] = mapped_column(default=0, nullable=False)
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="org_memberships")

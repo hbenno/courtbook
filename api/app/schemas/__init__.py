@@ -102,6 +102,7 @@ class BookingOut(BaseModel):
     payment_status: str
     amount_pence: int
     created_at: datetime
+    client_secret: str | None = None
 
 
 # --- User ---
@@ -128,8 +129,10 @@ class MembershipTierOut(BaseModel):
     max_concurrent_bookings: int
     max_daily_minutes: int
     cancellation_deadline_hours: int
-    peak_booking_fee_pence: int
+    early_booking_fee_pence: int
     offpeak_booking_fee_pence: int
+    peak_booking_fee_pence: int
+    floodlight_booking_fee_pence: int
 
 
 # --- Org Membership (admin views) ---
@@ -188,3 +191,31 @@ class PreferenceOut(BaseModel):
 
 class PreferencesReplace(BaseModel):
     preferences: list[PreferenceIn]
+
+
+# --- Credit ---
+
+
+class CreditBalanceOut(BaseModel):
+    balance_pence: int
+    user_id: int
+    organisation_id: int
+
+
+class CreditTransactionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    organisation_id: int
+    amount_pence: int
+    balance_after_pence: int
+    transaction_type: str
+    booking_id: int | None
+    description: str
+    created_at: datetime
+
+
+class CreditGrantRequest(BaseModel):
+    amount_pence: int
+    description: str

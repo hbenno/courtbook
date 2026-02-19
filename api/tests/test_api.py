@@ -1,8 +1,9 @@
-"""API tests: health, auth, availability, preferences, password reset."""
+"""API tests: health, auth, availability, preferences, password reset, pricing, credit, payment."""
 
 import uuid
 from datetime import date, time, timedelta
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,9 +13,18 @@ from app.core.auth import create_password_reset_token, hash_password
 from app.core.database import async_session_factory
 from app.main import app
 from app.models import Booking, BookingStatus, Organisation, Resource, Site, User
-from app.models.member import MembershipTier, OrgMembership
+from app.models.credit import CreditTransaction
+from app.models.member import MembershipTier, OrgMembership, OrgRole, UserRole
 from app.models.preference import UserPreference
 from app.services.operating_hours import closing_time, generate_slots
+from app.services.pricing import (
+    BAND_EARLY,
+    BAND_FLOODLIGHT,
+    BAND_OFFPEAK,
+    BAND_PEAK,
+    calculate_booking_fee,
+    determine_price_band,
+)
 
 
 @pytest.fixture
@@ -708,3 +718,551 @@ async def test_reset_password_missing_fields(client):
 
     resp = await client.post("/api/v1/auth/reset-password", json={"new_password": "abc"})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Pricing unit tests (pure functions, no DB)
+# ---------------------------------------------------------------------------
+
+
+def _resource(floodlit=False):
+    return SimpleNamespace(has_floodlights=floodlit)
+
+
+def _tier(**overrides):
+    defaults = {
+        "early_booking_fee_pence": 390,
+        "offpeak_booking_fee_pence": 525,
+        "peak_booking_fee_pence": 800,
+        "floodlight_booking_fee_pence": 1360,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+class TestPriceBand:
+    def test_weekday_early(self):
+        # Monday 8am → early
+        assert determine_price_band(_resource(), date(2026, 3, 16), time(8, 0), time(9, 0)) == BAND_EARLY
+
+    def test_weekday_offpeak(self):
+        # Monday 12pm → offpeak
+        assert determine_price_band(_resource(), date(2026, 3, 16), time(12, 0), time(13, 0)) == BAND_OFFPEAK
+
+    def test_weekday_peak(self):
+        # Monday 7pm → peak
+        assert determine_price_band(_resource(), date(2026, 3, 16), time(19, 0), time(20, 0)) == BAND_PEAK
+
+    def test_weekend_early(self):
+        # Saturday 8am → early
+        assert determine_price_band(_resource(), date(2026, 3, 21), time(8, 0), time(9, 0)) == BAND_EARLY
+
+    def test_weekend_peak(self):
+        # Saturday 10am → peak
+        assert determine_price_band(_resource(), date(2026, 3, 21), time(10, 0), time(11, 0)) == BAND_PEAK
+
+    def test_floodlight_winter(self):
+        # December Monday, floodlit court, 5pm-6pm (sunset ~3pm) → floodlight
+        assert (
+            determine_price_band(_resource(floodlit=True), date(2026, 12, 14), time(17, 0), time(18, 0))
+            == BAND_FLOODLIGHT
+        )
+
+    def test_non_floodlit_no_floodlight_band(self):
+        # Non-floodlit court after dusk → normal band (offpeak at 5pm weekday)
+        assert determine_price_band(_resource(), date(2026, 12, 14), time(17, 0), time(18, 0)) == BAND_OFFPEAK
+
+    def test_floodlit_summer_before_dusk(self):
+        # June floodlit court, 3pm-4pm (dusk ~9pm) → offpeak not floodlight
+        band = determine_price_band(_resource(floodlit=True), date(2026, 6, 15), time(15, 0), time(16, 0))
+        assert band == BAND_OFFPEAK
+
+    def test_custom_org_config(self):
+        # Override weekend early end to 10am → 9am is still early
+        config = {"weekend_early_end": "10:00"}
+        assert determine_price_band(_resource(), date(2026, 3, 21), time(9, 0), time(10, 0), config) == BAND_EARLY
+
+
+class TestBookingFee:
+    def test_early_1hr(self):
+        fee, band = calculate_booking_fee(_tier(), _resource(), date(2026, 3, 16), time(8, 0), 60)
+        assert fee == 390
+        assert band == BAND_EARLY
+
+    def test_offpeak_1hr(self):
+        fee, band = calculate_booking_fee(_tier(), _resource(), date(2026, 3, 16), time(12, 0), 60)
+        assert fee == 525
+        assert band == BAND_OFFPEAK
+
+    def test_peak_1hr(self):
+        fee, band = calculate_booking_fee(_tier(), _resource(), date(2026, 3, 16), time(19, 0), 60)
+        assert fee == 800
+        assert band == BAND_PEAK
+
+    def test_peak_2hr_doubles(self):
+        fee, band = calculate_booking_fee(_tier(), _resource(), date(2026, 3, 16), time(19, 0), 120)
+        assert fee == 1600
+        assert band == BAND_PEAK
+
+    def test_floodlight(self):
+        fee, band = calculate_booking_fee(_tier(), _resource(floodlit=True), date(2026, 12, 14), time(17, 0), 60)
+        assert fee == 1360
+        assert band == BAND_FLOODLIGHT
+
+    def test_junior_reduced_peak(self):
+        junior = _tier(peak_booking_fee_pence=390)
+        fee, band = calculate_booking_fee(junior, _resource(), date(2026, 3, 21), time(10, 0), 60)
+        assert fee == 390
+        assert band == BAND_PEAK
+
+    def test_zero_fee_tier(self):
+        free_tier = _tier(
+            early_booking_fee_pence=0,
+            offpeak_booking_fee_pence=0,
+            peak_booking_fee_pence=0,
+            floodlight_booking_fee_pence=0,
+        )
+        fee, band = calculate_booking_fee(free_tier, _resource(), date(2026, 3, 16), time(12, 0), 60)
+        assert fee == 0
+
+
+# ---------------------------------------------------------------------------
+# Payment / Credit integration tests
+# ---------------------------------------------------------------------------
+
+PAYMENT_USER_EMAIL = "payment-test@example.com"
+PAYMENT_USER_PASSWORD = "payment123"
+PAYMENT_ADMIN_EMAIL = "payment-admin@example.com"
+PAYMENT_ADMIN_PASSWORD = "payadmin123"
+
+
+def _next_weekday(days_ahead: int = 3) -> date:
+    """Return a future weekday date for booking tests."""
+    d = date.today() + timedelta(days=days_ahead)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
+@pytest.fixture
+async def seed_payment_data():
+    """Create org, site, courts, tier, users for payment flow tests."""
+    async with async_session_factory() as db:
+        org_result = await db.execute(select(Organisation).where(Organisation.slug == "pay-org"))
+        org = org_result.scalar_one_or_none()
+        if org:
+            # Clean up from previous runs
+            await db.execute(delete(CreditTransaction).where(CreditTransaction.organisation_id == org.id))
+            await db.execute(delete(Booking).where(Booking.organisation_id == org.id))
+            mem_result = await db.execute(select(OrgMembership).where(OrgMembership.organisation_id == org.id))
+            for m in mem_result.scalars().all():
+                m.credit_balance_pence = 0
+            await db.commit()
+
+            site_result = await db.execute(select(Site).where(Site.organisation_id == org.id))
+            site = site_result.scalar_one()
+            courts_result = await db.execute(select(Resource).where(Resource.site_id == site.id))
+            courts = {r.name: r for r in courts_result.scalars().all()}
+            user_result = await db.execute(select(User).where(User.email == PAYMENT_USER_EMAIL))
+            user = user_result.scalar_one()
+            admin_result = await db.execute(select(User).where(User.email == PAYMENT_ADMIN_EMAIL))
+            admin = admin_result.scalar_one()
+            tier_result = await db.execute(
+                select(MembershipTier).where(
+                    MembershipTier.organisation_id == org.id, MembershipTier.slug == "test-adult"
+                )
+            )
+            tier = tier_result.scalar_one()
+            mem_result2 = await db.execute(
+                select(OrgMembership).where(OrgMembership.user_id == user.id, OrgMembership.organisation_id == org.id)
+            )
+            membership = mem_result2.scalar_one()
+            return {
+                "org": org,
+                "site": site,
+                "court": courts["Pay Court"],
+                "floodlit_court": courts["Pay Floodlit"],
+                "tier": tier,
+                "user": user,
+                "admin": admin,
+                "membership": membership,
+            }
+
+        org = Organisation(name="Pay Org", slug="pay-org", email="pay@test.com")
+        db.add(org)
+        await db.flush()
+
+        site = Site(organisation_id=org.id, name="Pay Park", slug="pay-park", postcode="E5 0AA")
+        db.add(site)
+        await db.flush()
+
+        court = Resource(
+            site_id=site.id,
+            name="Pay Court",
+            slug="pay-court",
+            surface="hard",
+            has_floodlights=False,
+            is_active=True,
+            sort_order=0,
+        )
+        floodlit = Resource(
+            site_id=site.id,
+            name="Pay Floodlit",
+            slug="pay-floodlit",
+            surface="hard",
+            has_floodlights=True,
+            is_active=True,
+            sort_order=1,
+        )
+        db.add_all([court, floodlit])
+        await db.flush()
+
+        # Tier with uniform 500p fee for all bands (isolates payment logic from band logic)
+        tier = MembershipTier(
+            organisation_id=org.id,
+            name="Test Adult",
+            slug="test-adult",
+            advance_booking_days=7,
+            max_concurrent_bookings=7,
+            max_daily_minutes=240,
+            cancellation_deadline_hours=0,  # Allow immediate cancellation in tests
+            early_booking_fee_pence=500,
+            offpeak_booking_fee_pence=500,
+            peak_booking_fee_pence=500,
+            floodlight_booking_fee_pence=500,
+        )
+        db.add(tier)
+        await db.flush()
+
+        user = User(
+            email=PAYMENT_USER_EMAIL,
+            hashed_password=hash_password(PAYMENT_USER_PASSWORD),
+            first_name="Pay",
+            last_name="Tester",
+        )
+        db.add(user)
+        await db.flush()
+
+        membership = OrgMembership(
+            user_id=user.id,
+            organisation_id=org.id,
+            tier_id=tier.id,
+            role=OrgRole.MEMBER,
+        )
+        db.add(membership)
+
+        admin = User(
+            email=PAYMENT_ADMIN_EMAIL,
+            hashed_password=hash_password(PAYMENT_ADMIN_PASSWORD),
+            first_name="Pay",
+            last_name="Admin",
+            role=UserRole.ADMIN,
+        )
+        db.add(admin)
+        await db.flush()
+
+        admin_membership = OrgMembership(
+            user_id=admin.id,
+            organisation_id=org.id,
+            tier_id=tier.id,
+            role=OrgRole.ADMIN,
+        )
+        db.add(admin_membership)
+        await db.commit()
+
+        return {
+            "org": org,
+            "site": site,
+            "court": court,
+            "floodlit_court": floodlit,
+            "tier": tier,
+            "user": user,
+            "admin": admin,
+            "membership": membership,
+        }
+
+
+@pytest.fixture
+async def pay_auth_headers(client, seed_payment_data):
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": PAYMENT_USER_EMAIL, "password": PAYMENT_USER_PASSWORD},
+    )
+    assert resp.status_code == 200
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+@pytest.fixture
+async def pay_admin_headers(client, seed_payment_data):
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": PAYMENT_ADMIN_EMAIL, "password": PAYMENT_ADMIN_PASSWORD},
+    )
+    assert resp.status_code == 200
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+def _booking_body(court_id: int, start_hour: int = 12) -> dict:
+    """Build a valid booking request body."""
+    return {
+        "resource_id": court_id,
+        "booking_date": _next_weekday().isoformat(),
+        "start_time": f"{start_hour:02d}:00",
+        "duration_minutes": 60,
+    }
+
+
+@pytest.mark.asyncio
+async def test_booking_with_full_credit(client, seed_payment_data, pay_auth_headers):
+    """When credit covers the full fee, no Stripe is needed."""
+    data = seed_payment_data
+    # Grant 1000p credit (fee will be 500p)
+    async with async_session_factory() as db:
+        from app.services.credit import grant_credit
+
+        await grant_credit(db, data["user"].id, data["org"].id, 1000, "Test grant")
+        await db.commit()
+
+    resp = await client.post(
+        "/api/v1/bookings",
+        headers=pay_auth_headers,
+        json=_booking_body(data["court"].id),
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["amount_pence"] == 500
+    assert body["payment_status"] == "paid"
+    assert body["client_secret"] is None
+
+
+@pytest.mark.asyncio
+@patch("app.routes.bookings.ensure_stripe_customer", new_callable=AsyncMock, return_value="cus_test123")
+@patch("app.routes.bookings.create_payment_intent", new_callable=AsyncMock)
+async def test_booking_no_credit_full_stripe(
+    mock_create_pi,
+    mock_customer,
+    client,
+    seed_payment_data,
+    pay_auth_headers,
+):
+    """When no credit, full amount goes to Stripe."""
+    mock_pi = MagicMock()
+    mock_pi.id = "pi_test123"
+    mock_pi.client_secret = "secret_test123"
+    mock_create_pi.return_value = mock_pi
+
+    data = seed_payment_data
+    resp = await client.post(
+        "/api/v1/bookings",
+        headers=pay_auth_headers,
+        json=_booking_body(data["court"].id, start_hour=13),
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["amount_pence"] == 500
+    assert body["payment_status"] == "pending"
+    assert body["client_secret"] == "secret_test123"
+
+    mock_create_pi.assert_called_once()
+    assert mock_create_pi.call_args[0][0] == 500  # Full amount
+
+
+@pytest.mark.asyncio
+@patch("app.routes.bookings.ensure_stripe_customer", new_callable=AsyncMock, return_value="cus_test123")
+@patch("app.routes.bookings.create_payment_intent", new_callable=AsyncMock)
+async def test_booking_partial_credit(mock_create_pi, mock_customer, client, seed_payment_data, pay_auth_headers):
+    """When credit only partially covers fee, Stripe handles the remainder."""
+    mock_pi = MagicMock()
+    mock_pi.id = "pi_partial"
+    mock_pi.client_secret = "secret_partial"
+    mock_create_pi.return_value = mock_pi
+
+    data = seed_payment_data
+    # Grant 200p credit (fee is 500p, so 300p goes to Stripe)
+    async with async_session_factory() as db:
+        from app.services.credit import grant_credit
+
+        await grant_credit(db, data["user"].id, data["org"].id, 200, "Partial credit")
+        await db.commit()
+
+    resp = await client.post(
+        "/api/v1/bookings",
+        headers=pay_auth_headers,
+        json=_booking_body(data["court"].id, start_hour=14),
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["amount_pence"] == 500
+    assert body["payment_status"] == "pending"
+    assert body["client_secret"] == "secret_partial"
+
+    # Stripe should be charged the remainder (500 - 200 = 300)
+    mock_create_pi.assert_called_once()
+    assert mock_create_pi.call_args[0][0] == 300
+
+
+@pytest.mark.asyncio
+async def test_cancel_booking_credits_back(client, seed_payment_data, pay_auth_headers):
+    """Cancelling a paid booking credits the full amount back."""
+    data = seed_payment_data
+    # Grant credit and create a booking
+    async with async_session_factory() as db:
+        from app.services.credit import grant_credit
+
+        await grant_credit(db, data["user"].id, data["org"].id, 1000, "For cancel test")
+        await db.commit()
+
+    resp = await client.post(
+        "/api/v1/bookings",
+        headers=pay_auth_headers,
+        json=_booking_body(data["court"].id, start_hour=15),
+    )
+    assert resp.status_code == 201
+    booking_id = resp.json()["id"]
+
+    # Cancel it
+    resp = await client.delete(f"/api/v1/bookings/{booking_id}", headers=pay_auth_headers)
+    assert resp.status_code == 204
+
+    # Check credit balance: started with 1000, paid 500, got 500 back = 1000
+    async with async_session_factory() as db:
+        from app.services.credit import get_credit_balance
+
+        balance = await get_credit_balance(db, data["user"].id, data["org"].id)
+        assert balance == 1000
+
+
+@pytest.mark.asyncio
+async def test_webhook_payment_succeeded(client, seed_payment_data):
+    """Stripe webhook marks booking as paid."""
+    data = seed_payment_data
+
+    # Create a booking with pending payment directly in DB
+    async with async_session_factory() as db:
+        from app.models.booking import PaymentStatus
+
+        booking = Booking(
+            organisation_id=data["org"].id,
+            resource_id=data["court"].id,
+            user_id=data["user"].id,
+            booking_date=_next_weekday(5),
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            duration_minutes=60,
+            amount_pence=500,
+            payment_status=PaymentStatus.PENDING,
+            stripe_payment_intent_id="pi_webhook_success",
+        )
+        db.add(booking)
+        await db.commit()
+        booking_id = booking.id
+
+    event = {
+        "type": "payment_intent.succeeded",
+        "data": {"object": {"id": "pi_webhook_success"}},
+    }
+    with patch("app.routes.webhooks.construct_webhook_event", return_value=event):
+        resp = await client.post(
+            "/api/v1/webhooks/stripe",
+            content=b"payload",
+            headers={"stripe-signature": "sig"},
+        )
+    assert resp.status_code == 200
+
+    # Verify booking is now paid
+    async with async_session_factory() as db:
+        result = await db.execute(select(Booking).where(Booking.id == booking_id))
+        booking = result.scalar_one()
+        assert booking.payment_status == PaymentStatus.PAID
+
+
+@pytest.mark.asyncio
+async def test_webhook_payment_failed_reverses_credit(client, seed_payment_data):
+    """Stripe payment failure cancels booking and reverses credit deduction."""
+    data = seed_payment_data
+
+    # Grant credit, create booking with credit deduction, simulate pending Stripe
+    async with async_session_factory() as db:
+        from app.models.booking import PaymentStatus
+        from app.services.credit import grant_credit
+
+        await grant_credit(db, data["user"].id, data["org"].id, 200, "For webhook fail test")
+
+        booking = Booking(
+            organisation_id=data["org"].id,
+            resource_id=data["court"].id,
+            user_id=data["user"].id,
+            booking_date=_next_weekday(6),
+            start_time=time(11, 0),
+            end_time=time(12, 0),
+            duration_minutes=60,
+            amount_pence=500,
+            payment_status=PaymentStatus.PENDING,
+            stripe_payment_intent_id="pi_webhook_fail",
+        )
+        db.add(booking)
+        await db.flush()
+
+        # Simulate credit deduction that happened at booking time
+        from app.services.credit import deduct_credit
+
+        await deduct_credit(db, data["user"].id, data["org"].id, 200, booking.id)
+        await db.commit()
+        booking_id = booking.id
+
+    event = {
+        "type": "payment_intent.payment_failed",
+        "data": {"object": {"id": "pi_webhook_fail"}},
+    }
+    with patch("app.routes.webhooks.construct_webhook_event", return_value=event):
+        resp = await client.post(
+            "/api/v1/webhooks/stripe",
+            content=b"payload",
+            headers={"stripe-signature": "sig"},
+        )
+    assert resp.status_code == 200
+
+    # Verify booking is cancelled and credit was reversed
+    async with async_session_factory() as db:
+        result = await db.execute(select(Booking).where(Booking.id == booking_id))
+        booking = result.scalar_one()
+        assert booking.status == BookingStatus.CANCELLED
+
+        from app.services.credit import get_credit_balance
+
+        balance = await get_credit_balance(db, data["user"].id, data["org"].id)
+        assert balance == 200  # Original 200 restored
+
+
+@pytest.mark.asyncio
+async def test_admin_grant_credit(client, seed_payment_data, pay_admin_headers):
+    """Admin can grant credit to a member."""
+    data = seed_payment_data
+    member_id = data["membership"].id
+
+    resp = await client.post(
+        f"/api/v1/orgs/pay-org/members/{member_id}/credit",
+        headers=pay_admin_headers,
+        json={"amount_pence": 2000, "description": "Coach credit top-up"},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["amount_pence"] == 2000
+    assert body["transaction_type"] == "grant"
+    assert body["balance_after_pence"] == 2000
+
+
+@pytest.mark.asyncio
+async def test_admin_get_credit_balance(client, seed_payment_data, pay_admin_headers):
+    """Admin can view a member's credit balance."""
+    data = seed_payment_data
+    member_id = data["membership"].id
+
+    resp = await client.get(
+        f"/api/v1/orgs/pay-org/members/{member_id}/credit",
+        headers=pay_admin_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["user_id"] == data["user"].id
+    assert "balance_pence" in body

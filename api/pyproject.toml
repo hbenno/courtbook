@@ -24,6 +24,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "astral>=3.2",
     "aiosmtplib>=3.0",
+    "stripe>=10.0.0",
 ]
 
 [project.optional-dependencies]

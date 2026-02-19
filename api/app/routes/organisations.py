@@ -10,9 +10,21 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.core.dependencies import require_org_admin
 from app.models.booking import Booking, BookingStatus
+from app.models.credit import CreditTransaction
 from app.models.member import OrgMembership
 from app.models.organisation import Organisation, Resource, Site
-from app.schemas import AvailabilityOut, OrganisationOut, OrgMembershipOut, ResourceOut, SiteOut, SlotOut
+from app.schemas import (
+    AvailabilityOut,
+    CreditBalanceOut,
+    CreditGrantRequest,
+    CreditTransactionOut,
+    OrganisationOut,
+    OrgMembershipOut,
+    ResourceOut,
+    SiteOut,
+    SlotOut,
+)
+from app.services.credit import get_credit_balance, grant_credit
 from app.services.operating_hours import generate_slots
 
 router = APIRouter(prefix="/orgs", tags=["organisations"])
@@ -133,3 +145,95 @@ async def list_members(
         .order_by(OrgMembership.id)
     )
     return result.scalars().all()
+
+
+@router.get("/{slug}/members/{member_id}/credit", response_model=CreditBalanceOut)
+async def get_member_credit(
+    slug: str = Path(...),
+    member_id: int = Path(...),
+    membership: OrgMembership | None = Depends(require_org_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """View a member's credit balance. Requires org admin."""
+    org_result = await db.execute(
+        select(Organisation).where(Organisation.slug == slug, Organisation.is_active.is_(True))
+    )
+    org = org_result.scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+    # Verify the member exists in this org
+    mem_result = await db.execute(
+        select(OrgMembership).where(OrgMembership.id == member_id, OrgMembership.organisation_id == org.id)
+    )
+    target = mem_result.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+
+    balance = await get_credit_balance(db, target.user_id, org.id)
+    return CreditBalanceOut(balance_pence=balance, user_id=target.user_id, organisation_id=org.id)
+
+
+@router.get("/{slug}/members/{member_id}/credit/transactions", response_model=list[CreditTransactionOut])
+async def list_member_transactions(
+    slug: str = Path(...),
+    member_id: int = Path(...),
+    membership: OrgMembership | None = Depends(require_org_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """List recent credit transactions for a member. Requires org admin."""
+    org_result = await db.execute(
+        select(Organisation).where(Organisation.slug == slug, Organisation.is_active.is_(True))
+    )
+    org = org_result.scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+    mem_result = await db.execute(
+        select(OrgMembership).where(OrgMembership.id == member_id, OrgMembership.organisation_id == org.id)
+    )
+    target = mem_result.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+
+    txn_result = await db.execute(
+        select(CreditTransaction)
+        .where(CreditTransaction.user_id == target.user_id, CreditTransaction.organisation_id == org.id)
+        .order_by(CreditTransaction.created_at.desc())
+        .limit(50)
+    )
+    return txn_result.scalars().all()
+
+
+@router.post(
+    "/{slug}/members/{member_id}/credit",
+    response_model=CreditTransactionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def grant_member_credit(
+    body: CreditGrantRequest,
+    slug: str = Path(...),
+    member_id: int = Path(...),
+    membership: OrgMembership | None = Depends(require_org_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Grant credit to a member. Requires org admin."""
+    org_result = await db.execute(
+        select(Organisation).where(Organisation.slug == slug, Organisation.is_active.is_(True))
+    )
+    org = org_result.scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+    mem_result = await db.execute(
+        select(OrgMembership).where(OrgMembership.id == member_id, OrgMembership.organisation_id == org.id)
+    )
+    target = mem_result.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+
+    if body.amount_pence <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Amount must be positive")
+
+    txn = await grant_credit(db, target.user_id, org.id, body.amount_pence, body.description)
+    return txn
