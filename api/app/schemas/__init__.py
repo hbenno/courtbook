@@ -117,3 +117,17 @@ class MembershipTierOut(BaseModel):
     cancellation_deadline_hours: int
     peak_booking_fee_pence: int
     offpeak_booking_fee_pence: int
+
+
+# --- Org Membership (admin views) ---
+
+class OrgMembershipOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    role: str
+    is_active: bool
+    joined_at: datetime | None
+    tier: MembershipTierOut
+    user: UserOut
