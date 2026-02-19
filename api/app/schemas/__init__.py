@@ -152,3 +152,30 @@ class AvailabilityOut(BaseModel):
     court_name: str
     date: date
     slots: list[SlotOut]
+
+
+# --- Preferences ---
+
+
+class PreferenceIn(BaseModel):
+    site_id: int | None = None
+    resource_id: int | None = None
+    day_of_week: int | None = None
+    preferred_start_time: time | None = None
+    duration_minutes: int = 60
+
+
+class PreferenceOut(BaseModel):
+    id: int
+    priority: int
+    site_id: int | None
+    site_name: str | None
+    resource_id: int | None
+    resource_name: str | None
+    day_of_week: int | None
+    preferred_start_time: time | None
+    duration_minutes: int
+
+
+class PreferencesReplace(BaseModel):
+    preferences: list[PreferenceIn]

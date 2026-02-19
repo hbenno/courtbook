@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routes import auth, bookings, organisations
+from app.routes import auth, bookings, organisations, preferences
 
 
 @asynccontextmanager
@@ -36,6 +36,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(organisations.router, prefix=settings.api_prefix)
 app.include_router(bookings.router, prefix=settings.api_prefix)
+app.include_router(preferences.router, prefix=settings.api_prefix)
 
 
 @app.get("/health")

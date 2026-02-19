@@ -4,6 +4,7 @@ from app.models.base import Base
 from app.models.booking import Booking, BookingSource, BookingStatus, PaymentStatus
 from app.models.member import MembershipTier, OrgMembership, OrgRole, User, UserRole
 from app.models.organisation import Organisation, Resource, Site
+from app.models.preference import UserPreference
 
 __all__ = [
     "Base",
@@ -19,4 +20,5 @@ __all__ = [
     "BookingStatus",
     "BookingSource",
     "PaymentStatus",
+    "UserPreference",
 ]

@@ -1,4 +1,4 @@
-"""Basic API tests: health check, registration, login, protected routes, availability."""
+"""Basic API tests: health check, registration, login, protected routes, availability, preferences."""
 
 import uuid
 from datetime import date, time, timedelta
@@ -11,6 +11,8 @@ from app.core.auth import hash_password
 from app.core.database import async_session_factory
 from app.main import app
 from app.models import Booking, BookingStatus, Organisation, Resource, Site, User
+from app.models.member import MembershipTier, OrgMembership
+from app.models.preference import UserPreference
 from app.services.operating_hours import closing_time, generate_slots
 
 
@@ -334,3 +336,258 @@ async def test_availability_non_floodlit_winter(client, seed_availability_data):
     body = resp.json()
     assert len(body["slots"]) < 14  # Shorter day than floodlit
     assert body["slots"][0]["start_time"] == "07:00"
+
+
+# ---------------------------------------------------------------------------
+# Preferences tests
+# ---------------------------------------------------------------------------
+
+PREF_USER_EMAIL = "pref-test@example.com"
+PREF_USER_PASSWORD = "preftest123"
+
+
+@pytest.fixture
+async def seed_pref_data():
+    """Create org, site, 2 courts, membership tier, user with membership. Cleans preferences each run."""
+    async with async_session_factory() as db:
+        org_result = await db.execute(select(Organisation).where(Organisation.slug == "pref-org"))
+        org = org_result.scalar_one_or_none()
+        if org:
+            # Clean preferences from previous runs
+            await db.execute(delete(UserPreference).where(UserPreference.organisation_id == org.id))
+            await db.commit()
+
+            site_result = await db.execute(select(Site).where(Site.organisation_id == org.id))
+            site = site_result.scalar_one()
+            courts_result = await db.execute(select(Resource).where(Resource.site_id == site.id))
+            courts = {r.name: r for r in courts_result.scalars().all()}
+            user_result = await db.execute(select(User).where(User.email == PREF_USER_EMAIL))
+            user = user_result.scalar_one()
+            return {
+                "org": org,
+                "site": site,
+                "court_a": courts["Court A"],
+                "court_b": courts["Court B"],
+                "user": user,
+            }
+
+        org = Organisation(name="Pref Org", slug="pref-org", email="pref@test.com")
+        db.add(org)
+        await db.flush()
+
+        site = Site(organisation_id=org.id, name="Pref Park", slug="pref-park", postcode="E5 0AA")
+        db.add(site)
+        await db.flush()
+
+        court_a = Resource(
+            site_id=site.id,
+            name="Court A",
+            slug="court-a",
+            surface="hard",
+            has_floodlights=True,
+            is_active=True,
+            sort_order=0,
+        )
+        court_b = Resource(
+            site_id=site.id,
+            name="Court B",
+            slug="court-b",
+            surface="hard",
+            has_floodlights=False,
+            is_active=True,
+            sort_order=1,
+        )
+        db.add_all([court_a, court_b])
+        await db.flush()
+
+        tier = MembershipTier(
+            organisation_id=org.id,
+            name="Adult",
+            slug="adult",
+            advance_booking_days=7,
+            max_concurrent_bookings=7,
+            max_daily_minutes=120,
+            cancellation_deadline_hours=24,
+        )
+        db.add(tier)
+        await db.flush()
+
+        user = User(
+            email=PREF_USER_EMAIL,
+            hashed_password=hash_password(PREF_USER_PASSWORD),
+            first_name="Pref",
+            last_name="Tester",
+        )
+        db.add(user)
+        await db.flush()
+
+        membership = OrgMembership(
+            user_id=user.id,
+            organisation_id=org.id,
+            tier_id=tier.id,
+        )
+        db.add(membership)
+        await db.commit()
+
+        return {
+            "org": org,
+            "site": site,
+            "court_a": court_a,
+            "court_b": court_b,
+            "user": user,
+        }
+
+
+@pytest.fixture
+async def pref_auth_headers(client, seed_pref_data):
+    """Login as the pref test user and return auth headers."""
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": PREF_USER_EMAIL, "password": PREF_USER_PASSWORD},
+    )
+    assert resp.status_code == 200
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+async def test_preferences_get_empty(client, seed_pref_data, pref_auth_headers):
+    resp = await client.get("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_preferences_put_valid(client, seed_pref_data, pref_auth_headers):
+    data = seed_pref_data
+    body = {
+        "preferences": [
+            {"site_id": data["site"].id, "day_of_week": 0, "preferred_start_time": "19:00", "duration_minutes": 60},
+            {"site_id": data["site"].id, "resource_id": data["court_a"].id, "day_of_week": 2, "duration_minutes": 120},
+        ]
+    }
+    resp = await client.put("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers, json=body)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert len(result) == 2
+    assert result[0]["priority"] == 1
+    assert result[0]["site_name"] == "Pref Park"
+    assert result[0]["resource_id"] is None
+    assert result[0]["resource_name"] is None
+    assert result[0]["day_of_week"] == 0
+    assert result[0]["duration_minutes"] == 60
+    assert result[1]["priority"] == 2
+    assert result[1]["resource_name"] == "Court A"
+    assert result[1]["duration_minutes"] == 120
+
+
+@pytest.mark.asyncio
+async def test_preferences_put_replaces_existing(client, seed_pref_data, pref_auth_headers):
+    data = seed_pref_data
+    # Set initial preferences
+    body1 = {"preferences": [{"site_id": data["site"].id, "duration_minutes": 60}]}
+    resp = await client.put("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers, json=body1)
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+    # Replace with different preferences
+    body2 = {
+        "preferences": [
+            {"site_id": data["site"].id, "resource_id": data["court_b"].id, "duration_minutes": 120},
+            {"site_id": data["site"].id, "day_of_week": 5, "duration_minutes": 60},
+        ]
+    }
+    resp = await client.put("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers, json=body2)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert len(result) == 2
+    assert result[0]["priority"] == 1
+    assert result[0]["resource_name"] == "Court B"
+    assert result[1]["priority"] == 2
+    assert result[1]["day_of_week"] == 5
+
+
+@pytest.mark.asyncio
+async def test_preferences_delete(client, seed_pref_data, pref_auth_headers):
+    data = seed_pref_data
+    # Create some preferences first
+    body = {"preferences": [{"site_id": data["site"].id, "duration_minutes": 60}]}
+    await client.put("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers, json=body)
+
+    # Delete
+    resp = await client.delete("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers)
+    assert resp.status_code == 204
+
+    # Confirm empty
+    resp = await client.get("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_preferences_invalid_site(client, seed_pref_data, pref_auth_headers):
+    body = {"preferences": [{"site_id": 99999, "duration_minutes": 60}]}
+    resp = await client.put("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers, json=body)
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_preferences_invalid_resource(client, seed_pref_data, pref_auth_headers):
+    data = seed_pref_data
+    body = {"preferences": [{"site_id": data["site"].id, "resource_id": 99999, "duration_minutes": 60}]}
+    resp = await client.put("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers, json=body)
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_preferences_resource_wrong_site(client, seed_pref_data, pref_auth_headers):
+    """resource_id from another org is rejected."""
+    body = {"preferences": [{"resource_id": 99999, "duration_minutes": 60}]}
+    resp = await client.put("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers, json=body)
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_preferences_invalid_day_of_week(client, seed_pref_data, pref_auth_headers):
+    data = seed_pref_data
+    body = {"preferences": [{"site_id": data["site"].id, "day_of_week": 7, "duration_minutes": 60}]}
+    resp = await client.put("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers, json=body)
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_preferences_invalid_duration(client, seed_pref_data, pref_auth_headers):
+    data = seed_pref_data
+    body = {"preferences": [{"site_id": data["site"].id, "duration_minutes": 90}]}
+    resp = await client.put("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers, json=body)
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_preferences_too_many(client, seed_pref_data, pref_auth_headers):
+    data = seed_pref_data
+    body = {"preferences": [{"site_id": data["site"].id, "duration_minutes": 60}] * 11}
+    resp = await client.put("/api/v1/orgs/pref-org/preferences", headers=pref_auth_headers, json=body)
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_preferences_unauthenticated(client, seed_pref_data):
+    resp = await client.get("/api/v1/orgs/pref-org/preferences")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_preferences_non_member(client, seed_pref_data):
+    """A user who is not a member of the org gets 403."""
+    email = f"nonmember-{uuid.uuid4().hex[:8]}@example.com"
+    resp = await client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": "test123", "first_name": "Non", "last_name": "Member"},
+    )
+    assert resp.status_code == 201
+    token = resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = await client.get("/api/v1/orgs/pref-org/preferences", headers=headers)
+    assert resp.status_code == 403
