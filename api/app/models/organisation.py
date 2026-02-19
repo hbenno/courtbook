@@ -5,11 +5,16 @@ Site = a physical location with courts (e.g. London Fields, Clissold Park).
 Resource = an individual bookable court at a site.
 """
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import Boolean, ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.member import MembershipTier
 
 
 class Organisation(TimestampMixin, Base):
@@ -62,9 +67,7 @@ class Site(TimestampMixin, Base):
     organisation: Mapped["Organisation"] = relationship(back_populates="sites")
     resources: Mapped[list["Resource"]] = relationship(back_populates="site", lazy="selectin")
 
-    __table_args__ = (
-        Index("ix_sites_org_slug", "organisation_id", "slug", unique=True),
-    )
+    __table_args__ = (Index("ix_sites_org_slug", "organisation_id", "slug", unique=True),)
 
     def __repr__(self) -> str:
         return f"<Site {self.slug} @ {self.organisation_id}>"
@@ -96,9 +99,7 @@ class Resource(TimestampMixin, Base):
     # Relationships
     site: Mapped["Site"] = relationship(back_populates="resources")
 
-    __table_args__ = (
-        Index("ix_resources_site_slug", "site_id", "slug", unique=True),
-    )
+    __table_args__ = (Index("ix_resources_site_slug", "site_id", "slug", unique=True),)
 
     def __repr__(self) -> str:
         return f"<Resource {self.name} @ site {self.site_id}>"

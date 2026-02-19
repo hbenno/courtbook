@@ -4,10 +4,10 @@ A booking reserves a resource (court) for a member at a specific date/time.
 This is the core transactional entity in the system.
 """
 
+import enum
 from datetime import date, datetime, time
 
 from sqlalchemy import (
-    Boolean,
     Date,
     DateTime,
     Enum,
@@ -22,25 +22,23 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
 
-import enum
 
-
-class BookingStatus(str, enum.Enum):
+class BookingStatus(enum.StrEnum):
     CONFIRMED = "confirmed"
     CANCELLED = "cancelled"
     NO_SHOW = "no_show"
     COMPLETED = "completed"
 
 
-class BookingSource(str, enum.Enum):
-    MEMBER = "member"          # Self-service booking
-    ADMIN = "admin"            # Admin-created
-    FAIRNESS = "fairness"      # Allocated by fairness window
-    PROGRAMME = "programme"    # Block-booked for coaching
-    STANDING = "standing"      # Standing group reservation
+class BookingSource(enum.StrEnum):
+    MEMBER = "member"  # Self-service booking
+    ADMIN = "admin"  # Admin-created
+    FAIRNESS = "fairness"  # Allocated by fairness window
+    PROGRAMME = "programme"  # Block-booked for coaching
+    STANDING = "standing"  # Standing group reservation
 
 
-class PaymentStatus(str, enum.Enum):
+class PaymentStatus(enum.StrEnum):
     NOT_REQUIRED = "not_required"  # Free booking
     PENDING = "pending"
     PAID = "paid"
@@ -115,5 +113,5 @@ class Booking(TimestampMixin, Base):
 
 
 # Import for type hints
-from app.models.organisation import Resource  # noqa: E402
 from app.models.member import User  # noqa: E402
+from app.models.organisation import Resource  # noqa: E402

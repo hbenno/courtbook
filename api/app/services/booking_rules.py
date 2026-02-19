@@ -8,7 +8,7 @@ The main validate() function runs all rules and collects violations.
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.booking import Booking, BookingStatus
@@ -19,7 +19,7 @@ from app.models.member import MembershipTier, OrgMembership
 LONDON_TZ = ZoneInfo("Europe/London")
 
 
-class BookingViolation(Exception):
+class BookingViolationError(Exception):
     """Raised when a booking rule is violated."""
 
     def __init__(self, rule: str, message: str):
@@ -49,10 +49,10 @@ async def validate_booking(
     booking_date: date,
     start_time: time,
     duration_minutes: int,
-) -> list[BookingViolation]:
+) -> list[BookingViolationError]:
     """Run all booking rules and return a list of violations (empty = valid)."""
     tier = org_membership.tier
-    violations: list[BookingViolation] = []
+    violations: list[BookingViolationError] = []
 
     # 1. Slot duration
     v = check_slot_duration(tier, duration_minutes)
@@ -88,18 +88,19 @@ async def validate_booking(
     return violations
 
 
-def check_slot_duration(tier: MembershipTier, duration_minutes: int) -> BookingViolation | None:
+def check_slot_duration(tier: MembershipTier, duration_minutes: int) -> BookingViolationError | None:
     """Booking duration must be in the tier's allowed list."""
     allowed = tier.slot_durations_minutes or [60, 120]
     if duration_minutes not in allowed:
-        return BookingViolation(
+        choices = ", ".join(_fmt_duration(d) for d in allowed)
+        return BookingViolationError(
             "slot_duration",
-            f"Duration {_fmt_duration(duration_minutes)} not allowed. Choose from: {', '.join(_fmt_duration(d) for d in allowed)}.",
+            f"Duration {_fmt_duration(duration_minutes)} not allowed. Choose from: {choices}.",
         )
     return None
 
 
-def check_advance_window(tier: MembershipTier, booking_date: date) -> BookingViolation | None:
+def check_advance_window(tier: MembershipTier, booking_date: date) -> BookingViolationError | None:
     """Booking must be within the advance window, calculated from the window open time (default 9pm).
 
     Example: if today is Sunday and advance_booking_days=7, the window opens at 9pm tonight
@@ -121,29 +122,28 @@ def check_advance_window(tier: MembershipTier, booking_date: date) -> BookingVio
         max_date = today + timedelta(days=tier.advance_booking_days - 1)
 
     if booking_date > max_date:
-        return BookingViolation(
+        opens_on = booking_date - timedelta(days=tier.advance_booking_days)
+        return BookingViolationError(
             "advance_window",
             f"Cannot book more than {tier.advance_booking_days} days in advance. "
-            f"Earliest you can book {booking_date} is after {window_time_str} on {booking_date - timedelta(days=tier.advance_booking_days)}.",
+            f"Earliest you can book {booking_date} is after {window_time_str} on {opens_on}.",
         )
 
     return None
 
 
-def check_not_in_past(booking_date: date, start_time: time) -> BookingViolation | None:
+def check_not_in_past(booking_date: date, start_time: time) -> BookingViolationError | None:
     """Cannot book a slot that has already started."""
     now = datetime.now(LONDON_TZ)
     slot_start = datetime.combine(booking_date, start_time, tzinfo=LONDON_TZ)
 
     if slot_start <= now:
-        return BookingViolation("past_booking", "Cannot book a slot in the past.")
+        return BookingViolationError("past_booking", "Cannot book a slot in the past.")
 
     return None
 
 
-async def check_max_concurrent(
-    db: AsyncSession, user_id: int, tier: MembershipTier
-) -> BookingViolation | None:
+async def check_max_concurrent(db: AsyncSession, user_id: int, tier: MembershipTier) -> BookingViolationError | None:
     """Cannot exceed max concurrent confirmed future bookings."""
     now = datetime.now(LONDON_TZ)
     today = now.date()
@@ -158,7 +158,7 @@ async def check_max_concurrent(
     count = result.scalar_one()
 
     if count >= tier.max_concurrent_bookings:
-        return BookingViolation(
+        return BookingViolationError(
             "max_concurrent",
             f"You already have {count} upcoming bookings. Maximum allowed: {tier.max_concurrent_bookings}.",
         )
@@ -172,7 +172,7 @@ async def check_max_daily_minutes(
     tier: MembershipTier,
     booking_date: date,
     duration_minutes: int,
-) -> BookingViolation | None:
+) -> BookingViolationError | None:
     """Cannot exceed max daily minutes on the same day."""
     result = await db.execute(
         select(func.coalesce(func.sum(Booking.duration_minutes), 0)).where(
@@ -185,10 +185,11 @@ async def check_max_daily_minutes(
 
     if booked_minutes + duration_minutes > tier.max_daily_minutes:
         remaining = tier.max_daily_minutes - booked_minutes
-        return BookingViolation(
+        limit = _fmt_duration(tier.max_daily_minutes)
+        return BookingViolationError(
             "max_daily_minutes",
             f"You have {_fmt_duration(booked_minutes)} booked on {booking_date}. "
-            f"Adding {_fmt_duration(duration_minutes)} would exceed your daily limit of {_fmt_duration(tier.max_daily_minutes)}. "
+            f"Adding {_fmt_duration(duration_minutes)} would exceed your daily limit of {limit}. "
             f"You have {_fmt_duration(remaining)} remaining.",
         )
 
@@ -201,7 +202,7 @@ async def check_court_conflict(
     booking_date: date,
     start_time: time,
     end_time: time,
-) -> BookingViolation | None:
+) -> BookingViolationError | None:
     """No two confirmed bookings can overlap on the same court."""
     result = await db.execute(
         select(Booking).where(
@@ -215,22 +216,24 @@ async def check_court_conflict(
     conflict = result.scalar_one_or_none()
 
     if conflict:
-        return BookingViolation(
+        booked_from = conflict.start_time.strftime("%H:%M")
+        booked_to = conflict.end_time.strftime("%H:%M")
+        return BookingViolationError(
             "court_conflict",
-            f"Court already booked from {conflict.start_time.strftime('%H:%M')} to {conflict.end_time.strftime('%H:%M')}.",
+            f"Court already booked from {booked_from} to {booked_to}.",
         )
 
     return None
 
 
-def validate_cancellation(booking: Booking, tier: MembershipTier) -> BookingViolation | None:
+def validate_cancellation(booking: Booking, tier: MembershipTier) -> BookingViolationError | None:
     """Check if a booking can still be cancelled within the deadline."""
     now = datetime.now(LONDON_TZ)
     slot_start = datetime.combine(booking.booking_date, booking.start_time, tzinfo=LONDON_TZ)
     deadline = slot_start - timedelta(hours=tier.cancellation_deadline_hours)
 
     if now > deadline:
-        return BookingViolation(
+        return BookingViolationError(
             "cancellation_deadline",
             f"Cancellation deadline was {tier.cancellation_deadline_hours} hours before the booking "
             f"({deadline.strftime('%A %d %B at %H:%M')}). Too late to cancel.",

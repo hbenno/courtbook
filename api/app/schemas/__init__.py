@@ -1,10 +1,11 @@
 """Pydantic schemas for API serialisation."""
 
 from datetime import date, datetime, time
-from pydantic import BaseModel, EmailStr, ConfigDict
 
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 # --- Auth ---
+
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -30,6 +31,7 @@ class RefreshRequest(BaseModel):
 
 
 # --- Organisation ---
+
 
 class OrganisationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -68,6 +70,7 @@ class ResourceOut(BaseModel):
 
 # --- Booking ---
 
+
 class BookingCreate(BaseModel):
     resource_id: int
     booking_date: date
@@ -93,6 +96,7 @@ class BookingOut(BaseModel):
 
 
 # --- User ---
+
 
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -120,6 +124,7 @@ class MembershipTierOut(BaseModel):
 
 
 # --- Org Membership (admin views) ---
+
 
 class OrgMembershipOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)

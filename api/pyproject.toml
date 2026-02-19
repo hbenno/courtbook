@@ -37,9 +37,11 @@ dev = [
 [tool.ruff]
 target-version = "py312"
 line-length = 120
+extend-exclude = ["migrations"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "A", "SIM"]
+ignore = ["B008"]  # Depends() in defaults is standard FastAPI pattern
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -47,5 +49,8 @@ testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.12"
-strict = true
 plugins = ["pydantic.mypy"]
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true

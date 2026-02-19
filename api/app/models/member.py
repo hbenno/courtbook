@@ -5,6 +5,7 @@ MembershipTier = a tier within an organisation (e.g. Adult, Junior, Senior).
 OrgMembership = the link between a user and an organisation with their tier.
 """
 
+import enum
 from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Index, String, Text
@@ -13,18 +14,18 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
 
-import enum
 
-
-class UserRole(str, enum.Enum):
+class UserRole(enum.StrEnum):
     """Global platform roles."""
+
     MEMBER = "member"
     ADMIN = "admin"
     SUPERADMIN = "superadmin"
 
 
-class OrgRole(str, enum.Enum):
+class OrgRole(enum.StrEnum):
     """Roles within an organisation."""
+
     MEMBER = "member"
     COACH = "coach"
     ADMIN = "admin"
@@ -109,9 +110,7 @@ class MembershipTier(TimestampMixin, Base):
     # Relationships
     organisation: Mapped["Organisation"] = relationship(back_populates="membership_tiers")
 
-    __table_args__ = (
-        Index("ix_tiers_org_slug", "organisation_id", "slug", unique=True),
-    )
+    __table_args__ = (Index("ix_tiers_org_slug", "organisation_id", "slug", unique=True),)
 
     def __repr__(self) -> str:
         return f"<MembershipTier {self.name} @ org {self.organisation_id}>"
@@ -148,9 +147,7 @@ class OrgMembership(TimestampMixin, Base):
     organisation: Mapped["Organisation"] = relationship()
     tier: Mapped["MembershipTier"] = relationship()
 
-    __table_args__ = (
-        Index("ix_orgmember_user_org", "user_id", "organisation_id", unique=True),
-    )
+    __table_args__ = (Index("ix_orgmember_user_org", "user_id", "organisation_id", unique=True),)
 
     def __repr__(self) -> str:
         return f"<OrgMembership user={self.user_id} org={self.organisation_id}>"

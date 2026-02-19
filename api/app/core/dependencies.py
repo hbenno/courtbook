@@ -26,6 +26,7 @@ def _is_platform_admin(user: User) -> bool:
 # Authentication
 # ---------------------------------------------------------------------------
 
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
@@ -40,7 +41,7 @@ async def get_current_user(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
         user_id = int(payload["sub"])
     except (JWTError, KeyError, ValueError):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from None
 
     result = await db.execute(select(User).where(User.id == user_id, User.is_active.is_(True)))
     user = result.scalar_one_or_none()
@@ -61,6 +62,7 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
 # Org-level RBAC
 # ---------------------------------------------------------------------------
 
+
 async def get_org_membership(
     slug: str = Path(...),
     user: User = Depends(get_current_user),
@@ -75,15 +77,15 @@ async def get_org_membership(
     Returns the OrgMembership with tier eagerly loaded.
     """
     # Resolve the org from the slug
-    result = await db.execute(
+    org_result = await db.execute(
         select(Organisation).where(Organisation.slug == slug, Organisation.is_active.is_(True))
     )
-    org = result.scalar_one_or_none()
+    org = org_result.scalar_one_or_none()
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
     # Look up membership
-    result = await db.execute(
+    mem_result = await db.execute(
         select(OrgMembership)
         .options(selectinload(OrgMembership.tier))
         .where(
@@ -92,7 +94,7 @@ async def get_org_membership(
             OrgMembership.is_active.is_(True),
         )
     )
-    membership = result.scalar_one_or_none()
+    membership = mem_result.scalar_one_or_none()
 
     if membership is None:
         # Platform admins can access any org even without a membership record
@@ -116,6 +118,7 @@ def require_org_role(*allowed_roles: OrgRole) -> Callable:
         async def admin_thing(membership=Depends(require_org_role(OrgRole.ADMIN))):
             ...
     """
+
     async def _check(
         membership: OrgMembership | None = Depends(get_org_membership),
         user: User = Depends(get_current_user),
@@ -125,6 +128,7 @@ def require_org_role(*allowed_roles: OrgRole) -> Callable:
             return membership
 
         # membership is guaranteed non-None here (get_org_membership raises 403 for non-admins)
+        assert membership is not None
         if membership.role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

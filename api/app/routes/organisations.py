@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.core.dependencies import require_org_admin
 from app.models.member import OrgMembership
 from app.models.organisation import Organisation, Resource, Site
-from app.schemas import OrgMembershipOut, OrganisationOut, ResourceOut, SiteOut
+from app.schemas import OrganisationOut, OrgMembershipOut, ResourceOut, SiteOut
 
 router = APIRouter(prefix="/orgs", tags=["organisations"])
 
@@ -17,6 +17,7 @@ router = APIRouter(prefix="/orgs", tags=["organisations"])
 # ---------------------------------------------------------------------------
 # Public endpoints (no auth required — court availability for everyone)
 # ---------------------------------------------------------------------------
+
 
 @router.get("/{slug}", response_model=OrganisationOut)
 async def get_organisation(slug: str, db: AsyncSession = Depends(get_db)):
@@ -30,10 +31,7 @@ async def get_organisation(slug: str, db: AsyncSession = Depends(get_db)):
 @router.get("/{slug}/sites", response_model=list[SiteOut])
 async def list_sites(slug: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(Site)
-        .join(Organisation)
-        .where(Organisation.slug == slug, Site.is_active.is_(True))
-        .order_by(Site.name)
+        select(Site).join(Organisation).where(Organisation.slug == slug, Site.is_active.is_(True)).order_by(Site.name)
     )
     return result.scalars().all()
 
@@ -58,6 +56,7 @@ async def list_courts(slug: str, site_slug: str, db: AsyncSession = Depends(get_
 # Admin endpoints (org admin or platform admin required)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/{slug}/members", response_model=list[OrgMembershipOut])
 async def list_members(
     slug: str = Path(...),
@@ -65,9 +64,7 @@ async def list_members(
     db: AsyncSession = Depends(get_db),
 ):
     """List all members of the organisation. Requires org admin role."""
-    result = await db.execute(
-        select(Organisation).where(Organisation.slug == slug, Organisation.is_active.is_(True))
-    )
+    result = await db.execute(select(Organisation).where(Organisation.slug == slug, Organisation.is_active.is_(True)))
     org = result.scalar_one_or_none()
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")

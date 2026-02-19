@@ -7,12 +7,10 @@ Creates the organisation, all 7 parks with courts, membership tiers, and test us
 import asyncio
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import hash_password
 from app.core.database import async_session_factory, engine
-from app.models import Base, MembershipTier, OrgMembership, Organisation, Resource, Site, User, UserRole, OrgRole
-
+from app.models import Base, MembershipTier, Organisation, OrgMembership, OrgRole, Resource, Site, User, UserRole
 
 # Hackney Tennis parks and courts
 # All courts are hard surface.
@@ -256,7 +254,8 @@ async def seed():
             await db.flush()
 
             for i, court_data in enumerate(courts):
-                slug = court_data["name"].lower().replace(" ", "-").replace("(", "").replace(")", "").replace("&", "and")
+                name_lower = court_data["name"].lower()
+                slug = name_lower.replace(" ", "-").replace("(", "").replace(")", "").replace("&", "and")
                 resource_type = court_data.pop("resource_type", "court")
                 is_bookable = court_data.pop("is_bookable", True)
 
@@ -300,12 +299,14 @@ async def seed():
         await db.flush()
 
         # Admin org membership
-        db.add(OrgMembership(
-            user_id=admin.id,
-            organisation_id=org.id,
-            tier_id=tier_map["adult"].id,
-            role=OrgRole.ADMIN,
-        ))
+        db.add(
+            OrgMembership(
+                user_id=admin.id,
+                organisation_id=org.id,
+                tier_id=tier_map["adult"].id,
+                role=OrgRole.ADMIN,
+            )
+        )
 
         member = User(
             email="member@example.com",
@@ -317,12 +318,14 @@ async def seed():
         db.add(member)
         await db.flush()
 
-        db.add(OrgMembership(
-            user_id=member.id,
-            organisation_id=org.id,
-            tier_id=tier_map["adult"].id,
-            role=OrgRole.MEMBER,
-        ))
+        db.add(
+            OrgMembership(
+                user_id=member.id,
+                organisation_id=org.id,
+                tier_id=tier_map["adult"].id,
+                role=OrgRole.MEMBER,
+            )
+        )
 
         await db.commit()
 
@@ -332,9 +335,9 @@ async def seed():
         print(f"  {total_mini} mini courts")
         print(f"  {total_non_bookable} non-bookable (turn up & play)")
         print(f"  {len(TIERS)} membership tiers")
-        print(f"  2 test users:")
-        print(f"    admin@hackneytennis.org / admin123")
-        print(f"    member@example.com / member123")
+        print("  2 test users:")
+        print("    admin@hackneytennis.org / admin123")
+        print("    member@example.com / member123")
 
 
 if __name__ == "__main__":

@@ -14,35 +14,33 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.models.booking import Booking, BookingStatus
 from app.models.member import OrgMembership, User
-from app.models.organisation import Resource, Site
+from app.models.organisation import Resource
 from app.schemas import BookingCreate, BookingOut
 from app.services.booking_rules import calc_end_time, validate_booking, validate_cancellation
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 
 
-async def _get_org_membership(
-    db: AsyncSession, user_id: int, resource_id: int
-) -> tuple[OrgMembership, Resource]:
+async def _get_org_membership(db: AsyncSession, user_id: int, resource_id: int) -> tuple[OrgMembership, Resource]:
     """Resolve the user's org membership from the resource they're trying to book.
 
     Returns the OrgMembership (with tier loaded) and the Resource.
     Raises 404 if resource not found, 403 if user isn't a member of that org.
     """
     # Get resource -> site -> organisation
-    result = await db.execute(
+    res_result = await db.execute(
         select(Resource)
         .options(selectinload(Resource.site))
         .where(Resource.id == resource_id, Resource.is_active.is_(True))
     )
-    resource = result.scalar_one_or_none()
+    resource = res_result.scalar_one_or_none()
     if not resource:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Court not found or not bookable")
 
     org_id = resource.site.organisation_id
 
     # Get user's membership in this organisation (with tier loaded)
-    result = await db.execute(
+    mem_result = await db.execute(
         select(OrgMembership)
         .options(selectinload(OrgMembership.tier))
         .where(
@@ -51,7 +49,7 @@ async def _get_org_membership(
             OrgMembership.is_active.is_(True),
         )
     )
-    membership = result.scalar_one_or_none()
+    membership = mem_result.scalar_one_or_none()
     if not membership:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -126,9 +124,7 @@ async def cancel_booking(
     db: AsyncSession = Depends(get_db),
 ):
     # Load booking
-    result = await db.execute(
-        select(Booking).where(Booking.id == booking_id, Booking.user_id == user.id)
-    )
+    result = await db.execute(select(Booking).where(Booking.id == booking_id, Booking.user_id == user.id))
     booking = result.scalar_one_or_none()
     if not booking:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")

@@ -22,21 +22,27 @@ async def test_health(client):
 @pytest.mark.asyncio
 async def test_register_and_login(client):
     # Register
-    resp = await client.post("/api/v1/auth/register", json={
-        "email": "test@example.com",
-        "password": "testpass123",
-        "first_name": "Test",
-        "last_name": "User",
-    })
+    resp = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "test@example.com",
+            "password": "testpass123",
+            "first_name": "Test",
+            "last_name": "User",
+        },
+    )
     assert resp.status_code == 201
     tokens = resp.json()
     assert "access_token" in tokens
 
     # Login
-    resp = await client.post("/api/v1/auth/login", json={
-        "email": "test@example.com",
-        "password": "testpass123",
-    })
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "test@example.com",
+            "password": "testpass123",
+        },
+    )
     assert resp.status_code == 200
     assert "access_token" in resp.json()
 
