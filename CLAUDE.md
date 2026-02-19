@@ -64,10 +64,40 @@ The project owner is Howard, who is a cattle futures trader by day and a trustee
   - Tested with sample data, idempotent re-runs
 
 ### Not Done Yet (Remaining Phase 0)
-- ClubSpark API investigation (manual browser task — use dev tools to map internal endpoints)
+- **ClubSpark API investigation** — blocked pending Howard getting admin login credentials. Manual browser task: log into ClubSpark admin portal, use browser dev tools Network tab to map internal API endpoints (authentication flow, booking creation, member lookup). Goal is to understand if shadow-booking automation is feasible (Phase 3+).
+
+### CSV Import — Verification Needed Before Production Use
+- Column mappings in `scripts/import_csv.py` (`MEMBER_COLUMNS` dict) are based on a screenshot of a ClubSpark **test club** export — NOT the real Hackney Tennis data
+- **Before importing real data:** Open the Hackney Tennis CSV in a text editor (NOT Excel — Excel may hide encoding issues) and verify the exact column headers match `MEMBER_COLUMNS` values
+- `TIER_MAP` currently includes test club tier names (`"friendly 2"`, `"all test"`, `"import"`, `"additional"`) that map to `"adult"` as fallback — review these once real tier names are known
+- ClubSpark export uses `"Venue ID"` as the member identifier (not a separate "Member ID" column) — this gets stored as `legacy_id` on the User model
+- Bookings CSV column mappings (`BOOKING_COLUMNS`) have NOT been verified against real ClubSpark data — they're still based on test data
+- Always run with `--dry-run` first to validate before committing to DB
 
 ### Ready for Phase 1
 Phase 1 is "Minimum viable booking" — React PWA frontend, FCFS booking, Stripe test mode, preferences. The backend API is ready.
+
+#### Phase 1 Scope
+- React + TypeScript + Vite + Tailwind PWA in `/web`
+- Court browser: browse parks → courts → available slots
+- FCFS booking: select slot, confirm, pay (Stripe test mode)
+- User auth: login, register, password reset (backend JWT auth already done)
+- My bookings: view upcoming, cancel
+- Booking preferences: save preferred venues/courts/times (for Phase 4 fairness window)
+- Mobile-first responsive design (PWA with service worker for offline shell)
+
+#### Backend API Readiness for Phase 1
+All required endpoints exist:
+- Auth: register, login, refresh, me
+- Orgs: list sites, list courts per site
+- Bookings: create, list mine, cancel
+- Booking rules: advance window, duration validation, conflict detection, daily limits
+
+**Not yet built** (needed for Phase 1):
+- `GET /api/v1/orgs/{slug}/sites/{site_slug}/courts/{court_id}/availability?date=YYYY-MM-DD` — returns available time slots for a court on a given date
+- Stripe integration (payment intent creation, webhook handling)
+- Password reset flow (email + token)
+- User preferences CRUD endpoints
 
 ## Hackney Tennis Data
 
