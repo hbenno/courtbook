@@ -22,7 +22,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install ".[dev]"
 
       - name: Ruff check
         run: ruff check .
@@ -68,7 +68,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install ".[dev]"
 
       - name: Run migrations
         run: alembic upgrade head
