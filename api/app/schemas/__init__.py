@@ -25,6 +25,10 @@ class RegisterRequest(BaseModel):
     phone: str | None = None
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
 # --- Organisation ---
 
 class OrganisationOut(BaseModel):

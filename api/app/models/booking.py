@@ -64,12 +64,12 @@ class Booking(TimestampMixin, Base):
 
     # Status
     status: Mapped[BookingStatus] = mapped_column(
-        Enum(BookingStatus, name="booking_status"),
+        Enum(BookingStatus, name="booking_status", values_callable=lambda e: [x.value for x in e]),
         default=BookingStatus.CONFIRMED,
         nullable=False,
     )
     source: Mapped[BookingSource] = mapped_column(
-        Enum(BookingSource, name="booking_source"),
+        Enum(BookingSource, name="booking_source", values_callable=lambda e: [x.value for x in e]),
         default=BookingSource.MEMBER,
         nullable=False,
     )
@@ -78,7 +78,7 @@ class Booking(TimestampMixin, Base):
 
     # Payment
     payment_status: Mapped[PaymentStatus] = mapped_column(
-        Enum(PaymentStatus, name="payment_status"),
+        Enum(PaymentStatus, name="payment_status", values_callable=lambda e: [x.value for x in e]),
         default=PaymentStatus.NOT_REQUIRED,
         nullable=False,
     )
@@ -102,7 +102,7 @@ class Booking(TimestampMixin, Base):
             "booking_date",
             "start_time",
             unique=True,
-            postgresql_where="status = 'CONFIRMED'",
+            postgresql_where="status = 'confirmed'",
         ),
         # Fast lookups by org + date (the booking grid)
         Index("ix_bookings_org_date", "organisation_id", "booking_date"),

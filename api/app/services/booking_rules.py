@@ -5,13 +5,18 @@ Each rule returns a clear error message or None if the rule passes.
 The main validate() function runs all rules and collects violations.
 """
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.booking import Booking, BookingStatus
 from app.models.member import MembershipTier, OrgMembership
+
+# All booking times are wall-clock London times. The server must use
+# Europe/London for "now" comparisons so BST/GMT transitions are handled.
+LONDON_TZ = ZoneInfo("Europe/London")
 
 
 class BookingViolation(Exception):
@@ -100,13 +105,13 @@ def check_advance_window(tier: MembershipTier, booking_date: date) -> BookingVio
     Example: if today is Sunday and advance_booking_days=7, the window opens at 9pm tonight
     for next Sunday. Before 9pm, the furthest you can book is Saturday.
     """
-    now = datetime.now(UTC)
+    now = datetime.now(LONDON_TZ)
     today = now.date()
 
     # Parse window time (e.g. "21:00")
     window_time_str = getattr(tier, "booking_window_time", "21:00") or "21:00"
     h, m = map(int, window_time_str.split(":"))
-    window_time_today = datetime(today.year, today.month, today.day, h, m, tzinfo=UTC)
+    window_time_today = datetime(today.year, today.month, today.day, h, m, tzinfo=LONDON_TZ)
 
     # If we're past the window time, the window for advance_booking_days from now is open
     # If we're before the window time, it hasn't opened yet — so max date is one day less
@@ -127,8 +132,8 @@ def check_advance_window(tier: MembershipTier, booking_date: date) -> BookingVio
 
 def check_not_in_past(booking_date: date, start_time: time) -> BookingViolation | None:
     """Cannot book a slot that has already started."""
-    now = datetime.now(UTC)
-    slot_start = datetime.combine(booking_date, start_time, tzinfo=UTC)
+    now = datetime.now(LONDON_TZ)
+    slot_start = datetime.combine(booking_date, start_time, tzinfo=LONDON_TZ)
 
     if slot_start <= now:
         return BookingViolation("past_booking", "Cannot book a slot in the past.")
@@ -140,7 +145,7 @@ async def check_max_concurrent(
     db: AsyncSession, user_id: int, tier: MembershipTier
 ) -> BookingViolation | None:
     """Cannot exceed max concurrent confirmed future bookings."""
-    now = datetime.now(UTC)
+    now = datetime.now(LONDON_TZ)
     today = now.date()
 
     result = await db.execute(
@@ -220,8 +225,8 @@ async def check_court_conflict(
 
 def validate_cancellation(booking: Booking, tier: MembershipTier) -> BookingViolation | None:
     """Check if a booking can still be cancelled within the deadline."""
-    now = datetime.now(UTC)
-    slot_start = datetime.combine(booking.booking_date, booking.start_time, tzinfo=UTC)
+    now = datetime.now(LONDON_TZ)
+    slot_start = datetime.combine(booking.booking_date, booking.start_time, tzinfo=LONDON_TZ)
     deadline = slot_start - timedelta(hours=tier.cancellation_deadline_hours)
 
     if now > deadline:

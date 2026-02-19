@@ -42,7 +42,7 @@ class User(TimestampMixin, Base):
     hashed_password: Mapped[str | None] = mapped_column(String(200))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole, name="user_role"),
+        Enum(UserRole, name="user_role", values_callable=lambda e: [x.value for x in e]),
         default=UserRole.MEMBER,
         nullable=False,
     )
@@ -131,7 +131,7 @@ class OrgMembership(TimestampMixin, Base):
     organisation_id: Mapped[int] = mapped_column(ForeignKey("organisations.id"), nullable=False)
     tier_id: Mapped[int] = mapped_column(ForeignKey("membership_tiers.id"), nullable=False)
     role: Mapped[OrgRole] = mapped_column(
-        Enum(OrgRole, name="org_role"),
+        Enum(OrgRole, name="org_role", values_callable=lambda e: [x.value for x in e]),
         default=OrgRole.MEMBER,
         nullable=False,
     )
