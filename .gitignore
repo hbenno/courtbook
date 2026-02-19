@@ -33,3 +33,6 @@ node_modules/
 .coverage
 htmlcov/
 .mypy_cache/
+
+# Import data (may contain PII)
+api/data/*.csv
