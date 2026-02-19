@@ -28,20 +28,23 @@ from app.models.organisation import Organisation, Resource, Site
 LONDON_TZ = ZoneInfo("Europe/London")
 
 # ---------------------------------------------------------------------------
-# Column mappings — update these when you have the real ClubSpark CSV headers.
-# Keys are the internal field names, values are the CSV column headers.
+# Column mappings — matched to ClubSpark LTA CSV export format.
+# Keys are internal field names, values are CSV column headers.
+# NOTE: Verify exact headers by opening the real CSV in a text editor (not Excel)
+# since Excel truncates long headers. These are best-effort from the test export.
 # ---------------------------------------------------------------------------
 
 MEMBER_COLUMNS = {
     "email": "Email",
-    "first_name": "First Name",
+    "first_name": "First name",
     "last_name": "Last Name",
-    "phone": "Phone",
+    "phone": "Mobile number",
     "date_of_birth": "Date of Birth",
-    "membership_type": "Membership Type",
-    "member_id": "Member ID",
-    "joined_date": "Joined Date",
+    "membership_type": "Membership",
+    "member_id": "Venue ID",
     "expiry_date": "Expiry Date",
+    # Also available but not mapped: Gender, Age, Junior, Payment,
+    # Cost, Paid, Direct Debit, Address 1, Address 2, Emergency contact
 }
 
 BOOKING_COLUMNS = {
@@ -58,20 +61,30 @@ BOOKING_COLUMNS = {
 }
 
 # Map ClubSpark membership type names to CourtBook tier slugs.
-# Update values when you see what ClubSpark actually calls them.
+# Keys are lowercased ClubSpark package names → CourtBook tier slugs.
+# Add entries here as you discover what Hackney Tennis packages are called in ClubSpark.
 TIER_MAP = {
+    # Standard Hackney Tennis tiers
     "adult": "adult",
     "adult member": "adult",
+    "adult membership": "adult",
     "junior": "junior",
     "junior member": "junior",
+    "junior membership": "junior",
     "senior": "senior",
     "senior member": "senior",
+    "senior membership": "senior",
     "pay and play": "pay-and-play",
     "pay & play": "pay-and-play",
     "coach level 2": "coach-l2",
     "coach level 3": "coach-l3",
     "coach level 4": "coach-l4",
     "coach level 5": "coach-l5",
+    # ClubSpark test club tiers (seen in export) — remap or remove for production
+    "friendly 2": "adult",
+    "all test": "adult",
+    "import": "adult",
+    "additional": "adult",
 }
 
 # ClubSpark booking status → CourtBook BookingStatus
