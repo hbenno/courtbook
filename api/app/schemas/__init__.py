@@ -136,3 +136,19 @@ class OrgMembershipOut(BaseModel):
     joined_at: datetime | None
     tier: MembershipTierOut
     user: UserOut
+
+
+# --- Availability ---
+
+
+class SlotOut(BaseModel):
+    start_time: str  # "HH:MM"
+    end_time: str  # "HH:MM"
+    is_available: bool
+
+
+class AvailabilityOut(BaseModel):
+    court_id: int
+    court_name: str
+    date: date
+    slots: list[SlotOut]
