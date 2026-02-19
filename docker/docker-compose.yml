@@ -13,11 +13,15 @@ services:
       CB_REDIS_URL: redis://redis:6379/0
       CB_DEBUG: "true"
       CB_SECRET_KEY: dev-secret-change-in-production
+      CB_SMTP_HOST: mailpit
+      CB_SMTP_PORT: "1025"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     restart: unless-stopped
 
   # --- Celery worker ---

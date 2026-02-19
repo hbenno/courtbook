@@ -1,14 +1,37 @@
-"""Authentication routes: register, login, token refresh, current user."""
+"""Authentication routes: register, login, token refresh, current user, password reset."""
+
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import create_access_token, create_refresh_token, decode_token, hash_password, verify_password
+from app.core.auth import (
+    _password_fingerprint,
+    create_access_token,
+    create_password_reset_token,
+    create_refresh_token,
+    decode_token,
+    hash_password,
+    verify_password,
+    verify_password_reset_token,
+)
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.models.member import User
-from app.schemas import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse, UserOut
+from app.schemas import (
+    ForgotPasswordRequest,
+    LoginRequest,
+    RefreshRequest,
+    RegisterRequest,
+    ResetPasswordRequest,
+    TokenResponse,
+    UserOut,
+)
+from app.services.email import send_password_reset_email
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -76,3 +99,42 @@ async def refresh_token(body: RefreshRequest, db: AsyncSession = Depends(get_db)
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)):
     return user
+
+
+# ---------------------------------------------------------------------------
+# Password reset
+# ---------------------------------------------------------------------------
+
+
+@router.post("/forgot-password")
+async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Request a password reset email. Always returns 200 to prevent user enumeration."""
+    result = await db.execute(select(User).where(User.email == body.email, User.is_active.is_(True)))
+    user = result.scalar_one_or_none()
+
+    if user and user.hashed_password:
+        token = create_password_reset_token(user.id, user.hashed_password)
+        await send_password_reset_email(user.email, token)
+
+    return {"message": "If an account exists with that email, a reset link has been sent"}
+
+
+@router.post("/reset-password")
+async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Reset password using a token from the forgot-password email."""
+    try:
+        token_data = verify_password_reset_token(body.token)
+    except (JWTError, KeyError, ValueError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token") from None
+
+    result = await db.execute(select(User).where(User.id == token_data["user_id"], User.is_active.is_(True)))
+    user = result.scalar_one_or_none()
+    if not user or not user.hashed_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
+
+    if _password_fingerprint(user.hashed_password) != token_data["fingerprint"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
+
+    user.hashed_password = hash_password(body.new_password)
+
+    return {"message": "Password reset successfully"}

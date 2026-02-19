@@ -1,13 +1,14 @@
-"""Basic API tests: health check, registration, login, protected routes, availability, preferences."""
+"""API tests: health, auth, availability, preferences, password reset."""
 
 import uuid
 from datetime import date, time, timedelta
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
 
-from app.core.auth import hash_password
+from app.core.auth import create_password_reset_token, hash_password
 from app.core.database import async_session_factory
 from app.main import app
 from app.models import Booking, BookingStatus, Organisation, Resource, Site, User
@@ -591,3 +592,119 @@ async def test_preferences_non_member(client, seed_pref_data):
 
     resp = await client.get("/api/v1/orgs/pref-org/preferences", headers=headers)
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Password reset tests
+# ---------------------------------------------------------------------------
+
+RESET_USER_EMAIL = "reset-test@example.com"
+RESET_USER_PASSWORD = "oldpass123"
+
+
+@pytest.fixture
+async def seed_reset_user():
+    """Create a user for password reset tests."""
+    async with async_session_factory() as db:
+        user_result = await db.execute(select(User).where(User.email == RESET_USER_EMAIL))
+        user = user_result.scalar_one_or_none()
+        if user:
+            # Reset password back to original for test idempotency
+            user.hashed_password = hash_password(RESET_USER_PASSWORD)
+            await db.commit()
+            return user
+
+        user = User(
+            email=RESET_USER_EMAIL,
+            hashed_password=hash_password(RESET_USER_PASSWORD),
+            first_name="Reset",
+            last_name="Tester",
+        )
+        db.add(user)
+        await db.commit()
+        return user
+
+
+@pytest.mark.asyncio
+@patch("app.routes.auth.send_password_reset_email", new_callable=AsyncMock)
+async def test_forgot_password_valid_email(mock_send, client, seed_reset_user):
+    resp = await client.post("/api/v1/auth/forgot-password", json={"email": RESET_USER_EMAIL})
+    assert resp.status_code == 200
+    assert "reset link" in resp.json()["message"].lower()
+    mock_send.assert_called_once()
+    assert mock_send.call_args[0][0] == RESET_USER_EMAIL
+
+
+@pytest.mark.asyncio
+@patch("app.routes.auth.send_password_reset_email", new_callable=AsyncMock)
+async def test_forgot_password_unknown_email(mock_send, client):
+    resp = await client.post("/api/v1/auth/forgot-password", json={"email": "nobody@example.com"})
+    assert resp.status_code == 200  # No user enumeration
+    mock_send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reset_password_valid_token(client, seed_reset_user):
+    user = seed_reset_user
+    token = create_password_reset_token(user.id, user.hashed_password)
+
+    resp = await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "new_password": "newpass456"},
+    )
+    assert resp.status_code == 200
+    assert "successfully" in resp.json()["message"].lower()
+
+    # Can login with new password
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": RESET_USER_EMAIL, "password": "newpass456"},
+    )
+    assert resp.status_code == 200
+    assert "access_token" in resp.json()
+
+    # Old password no longer works
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": RESET_USER_EMAIL, "password": RESET_USER_PASSWORD},
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_reset_password_token_already_used(client, seed_reset_user):
+    """After using a token to reset, the same token should be rejected (fingerprint mismatch)."""
+    user = seed_reset_user
+    token = create_password_reset_token(user.id, user.hashed_password)
+
+    # Use the token
+    resp = await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "new_password": "newpass789"},
+    )
+    assert resp.status_code == 200
+
+    # Try to use the same token again
+    resp = await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "new_password": "anotherpass"},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reset_password_tampered_token(client, seed_reset_user):
+    resp = await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": "totally.invalid.token", "new_password": "newpass123"},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reset_password_missing_fields(client):
+    resp = await client.post("/api/v1/auth/reset-password", json={"token": "abc"})
+    assert resp.status_code == 422
+
+    resp = await client.post("/api/v1/auth/reset-password", json={"new_password": "abc"})
+    assert resp.status_code == 422

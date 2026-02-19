@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
     jwt_algorithm: str = "HS256"
 
+    # Email / SMTP
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_from: str = "noreply@courtbook.io"
+    password_reset_expire_minutes: int = 30
+    frontend_url: str = "http://localhost:5173"
+
     # Stripe (test mode)
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
