@@ -166,6 +166,21 @@ class AvailabilityOut(BaseModel):
     slots: list[SlotOut]
 
 
+class CourtAvailability(BaseModel):
+    court_id: int
+    court_name: str
+    has_floodlights: bool
+    surface: str | None
+    slots: list[SlotOut]
+
+
+class SiteAvailabilityOut(BaseModel):
+    site_id: int
+    site_name: str
+    date: date
+    courts: list[CourtAvailability]
+
+
 # --- Preferences ---
 
 

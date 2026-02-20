@@ -14,6 +14,7 @@ import type {
   RegisterRequest,
   Resource,
   Site,
+  SiteAvailability,
   TokenResponse,
   User,
 } from '../types/api'
@@ -67,6 +68,12 @@ export function getCourts(siteSlug: string) {
 export function getAvailability(siteSlug: string, courtId: number, date: string) {
   return apiFetch<Availability>(
     `/orgs/${ORG_SLUG}/sites/${siteSlug}/courts/${courtId}/availability?date=${date}`,
+  )
+}
+
+export function getSiteAvailability(siteSlug: string, date: string) {
+  return apiFetch<SiteAvailability>(
+    `/orgs/${ORG_SLUG}/sites/${siteSlug}/availability?date=${date}`,
   )
 }
 

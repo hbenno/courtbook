@@ -78,6 +78,21 @@ export interface Availability {
   slots: Slot[]
 }
 
+export interface CourtAvailability {
+  court_id: number
+  court_name: string
+  has_floodlights: boolean
+  surface: string | null
+  slots: Slot[]
+}
+
+export interface SiteAvailability {
+  site_id: number
+  site_name: string
+  date: string // "YYYY-MM-DD"
+  courts: CourtAvailability[]
+}
+
 // --- Booking ---
 
 export interface BookingCreate {

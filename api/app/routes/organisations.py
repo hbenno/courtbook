@@ -15,12 +15,14 @@ from app.models.member import OrgMembership
 from app.models.organisation import Organisation, Resource, Site
 from app.schemas import (
     AvailabilityOut,
+    CourtAvailability,
     CreditBalanceOut,
     CreditGrantRequest,
     CreditTransactionOut,
     OrganisationOut,
     OrgMembershipOut,
     ResourceOut,
+    SiteAvailabilityOut,
     SiteOut,
     SlotOut,
 )
@@ -66,6 +68,78 @@ async def list_courts(slug: str, site_slug: str, db: AsyncSession = Depends(get_
         .order_by(Resource.sort_order, Resource.name)
     )
     return result.scalars().all()
+
+
+@router.get(
+    "/{slug}/sites/{site_slug}/availability",
+    response_model=SiteAvailabilityOut,
+)
+async def get_site_availability(
+    slug: str,
+    site_slug: str,
+    query_date: date = Query(..., alias="date", description="Date in YYYY-MM-DD format"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return availability for ALL courts at a site on a given date.
+
+    Used by the grid view where courts are columns and times are rows.
+    """
+    # Resolve the site
+    site_result = await db.execute(
+        select(Site)
+        .join(Organisation)
+        .where(
+            Site.slug == site_slug,
+            Site.is_active.is_(True),
+            Organisation.slug == slug,
+            Organisation.is_active.is_(True),
+        )
+    )
+    site = site_result.scalar_one_or_none()
+    if site is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found")
+
+    # Get all active courts at this site
+    courts_result = await db.execute(
+        select(Resource)
+        .where(Resource.site_id == site.id, Resource.is_active.is_(True))
+        .order_by(Resource.sort_order, Resource.name)
+    )
+    courts = courts_result.scalars().all()
+
+    # Fetch all confirmed bookings for these courts on this date in one query
+    court_ids = [c.id for c in courts]
+    bookings_result = await db.execute(
+        select(Booking.resource_id, Booking.start_time, Booking.end_time).where(
+            Booking.resource_id.in_(court_ids),
+            Booking.booking_date == query_date,
+            Booking.status == BookingStatus.CONFIRMED,
+        )
+    )
+    # Group bookings by court
+    bookings_by_court: dict[int, list[tuple]] = {cid: [] for cid in court_ids}
+    for row in bookings_result.all():
+        bookings_by_court[row[0]].append((row[1], row[2]))
+
+    court_avails = []
+    for court in courts:
+        slots = generate_slots(court.has_floodlights, court.is_indoor, query_date, bookings_by_court[court.id])
+        court_avails.append(
+            CourtAvailability(
+                court_id=court.id,
+                court_name=court.name,
+                has_floodlights=court.has_floodlights,
+                surface=court.surface,
+                slots=[SlotOut(**s) for s in slots],
+            )
+        )
+
+    return SiteAvailabilityOut(
+        site_id=site.id,
+        site_name=site.name,
+        date=query_date,
+        courts=court_avails,
+    )
 
 
 @router.get(

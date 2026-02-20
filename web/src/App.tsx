@@ -8,7 +8,6 @@ import { RegisterPage } from './pages/RegisterPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { ParkListPage } from './pages/parks/ParkListPage'
-import { CourtListPage } from './pages/parks/CourtListPage'
 import { AvailabilityPage } from './pages/parks/AvailabilityPage'
 import { BookingConfirmPage } from './pages/bookings/BookingConfirmPage'
 import { MyBookingsPage } from './pages/bookings/MyBookingsPage'
@@ -40,12 +39,11 @@ export default function App() {
             <Route element={<AppLayout />}>
               <Route path="/" element={<Navigate to="/parks" replace />} />
               <Route path="/parks" element={<ParkListPage />} />
-              <Route path="/parks/:siteSlug" element={<CourtListPage />} />
-              <Route path="/parks/:siteSlug/courts/:courtId" element={<AvailabilityPage />} />
+              <Route path="/parks/:siteSlug" element={<AvailabilityPage />} />
 
               {/* Protected */}
               <Route
-                path="/parks/:siteSlug/courts/:courtId/book"
+                path="/parks/:siteSlug/book"
                 element={
                   <ProtectedRoute>
                     <BookingConfirmPage />
