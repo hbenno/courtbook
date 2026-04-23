@@ -6,6 +6,12 @@ CourtBook is a court and course booking platform being built for Hackney Tennis,
 
 The project owner is Howard, who is a cattle futures trader by day and a trustee/volunteer for Hackney Tennis. He codes in Python and is not a beginner. The current booking system is ClubSpark (LTA's platform), which is stagnant and inadequate.
 
+## Project tracking
+
+Living project state is in `/mnt/e/Eastmoor Capital/UMGAS - Documents/Python_Code/claude_sessions/tracking/courtbook.md` (SharePoint-synced, readable from SIXLEIGH1 and EM1). Covers both code and specs streams of CourtBook work.
+
+On session start, read that file — `## Status`, `## Next session`, `## Open questions`. On session end, update it alongside the session summary.
+
 ## Architecture
 
 - **Backend:** Python 3.12, FastAPI (async), SQLAlchemy 2.0 async with asyncpg
