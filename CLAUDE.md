@@ -8,9 +8,22 @@ The project owner is Howard, who is a cattle futures trader by day and a trustee
 
 ## Project tracking
 
-Living project state is in `/mnt/e/Eastmoor Capital/UMGAS - Documents/Python_Code/claude_sessions/tracking/courtbook.md` (SharePoint-synced, readable from SIXLEIGH1 and EM1). Covers both code and specs streams of CourtBook work.
+Living project state is in
+`/mnt/e/Eastmoor Capital/UMGAS - Documents/Python_Code/claude_sessions/tracking/courtbook.md`
+(SharePoint-synced, readable from SIXLEIGH1 and EM1). Covers both
+code and specs streams of CourtBook work.
 
-On session start, read that file — `## Status`, `## Next session`, `## Open questions`. On session end, update it alongside the session summary.
+On session start, read that file — `## Status`, `## Next session`,
+`## Open questions`. On session end, update it alongside the session
+summary.
+
+### Journals
+
+For ongoing CourtBook work threads spanning multiple sessions,
+journals live in `docs/session_summaries/journal_<topic>.md` —
+append-only, dated entries. At session start, scan for journals
+and ask whether continuing one. At session end, `/session-summary`
+prompts for the choice.
 
 ## Architecture
 
